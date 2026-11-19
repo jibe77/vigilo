@@ -20,19 +20,27 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const resp = await fetch(`/api${path}`, { ...init, headers });
   if (resp.status === 401) {
     setToken(null);
-    throw new ApiError(401, "Unauthorized");
+    throw new ApiError(401, "Session expired, please log in again");
+  }
+  // Read the body once: a non-JSON body (HTML error page, empty 502 from a
+  // proxy) must never surface as "Unexpected token '<' ... is not valid JSON".
+  const raw = await resp.text();
+  let data: unknown = undefined;
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = undefined;
+    }
   }
   if (!resp.ok) {
-    let detail = resp.statusText;
-    try {
-      detail = (await resp.json()).detail ?? detail;
-    } catch {
-      /* ignore */
-    }
+    const detail =
+      (data as { detail?: unknown } | undefined)?.detail ??
+      (raw ? `HTTP ${resp.status}` : resp.statusText);
     throw new ApiError(resp.status, String(detail));
   }
-  if (resp.status === 204) return undefined as T;
-  return (await resp.json()) as T;
+  if (resp.status === 204 || data === undefined) return undefined as T;
+  return data as T;
 }
 
 export class ApiError extends Error {
