@@ -68,8 +68,24 @@ RUN apk update && apk add --no-cache \
     libx11 libxcomposite libxdamage libxext libxfixes libxrandr \
     mesa-gbm fontconfig
 
-# OpenCode CLI
-RUN npm install -g opencode-ai
+# OpenCode CLI 2.x — official static glibc binary: wolfi-base:latest is glibc
+# (not musl), so the -musl asset won't start ("not found") while the glibc
+# asset runs natively, no patchelf (verified in-container, opencode v2.3.0).
+# npm "opencode-ai" only ships 1.x, hence the pinned release tarball +
+# SHA256 check (upstream SHA256SUMS).
+ARG OPENCODE_VERSION=2.3.0
+RUN ARCH=$(uname -m) && \
+    case "$ARCH" in \
+      aarch64) OC_ARCH=arm64; OC_SHA=3207fb5cdec448d479242c0f1a14f4f7bdfcad3a79209b5eb8f9003725e93711 ;; \
+      x86_64)  OC_ARCH=x64;   OC_SHA=fc0f81522aceeabac47693d88389efa2bc517ce74c2c38fd6967819fcc6e4d3b ;; \
+      *) echo "unsupported arch $ARCH" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-${OC_ARCH}.tar.gz" -o /tmp/oc.tar.gz && \
+    echo "${OC_SHA}  /tmp/oc.tar.gz" | sha256sum -c - && \
+    mkdir -p /usr/local/bin && \
+    tar xzf /tmp/oc.tar.gz -C /usr/local/bin && \
+    chmod +x /usr/local/bin/opencode && rm /tmp/oc.tar.gz && \
+    opencode --version
 
 # OpenCode provider: LiteLLM via OpenAI-compatible SDK
 RUN mkdir -p /tmp/.config/opencode && \
