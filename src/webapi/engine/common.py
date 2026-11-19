@@ -220,9 +220,9 @@ def build_model_overrides(admin: Any, repo: Repository) -> dict:
 
 
 def capture_source_info(run: Run, repo: Repository, repo_dir: str) -> None:
-    """Best-effort: commit SHA of a GitLab checkout + a persistent browse-only file
+    """Best-effort: commit SHA of a git (GitLab/GitHub) checkout + a persistent browse-only file
     tree (the checkout is deleted after the run, so grab both now)."""
-    if repo.source_type == "gitlab":
+    if repo.source_type in ("gitlab", "github"):
         try:
             import subprocess
             out = subprocess.run(

@@ -78,7 +78,7 @@ class DockerTemporalEngine:
         # Materialize the source into repo_dir (extract upload / clone GitLab).
         token = None
         upload_path = None
-        if repo.source_type == "gitlab" and repo.default_credential_id:
+        if repo.source_type in ("gitlab", "github") and repo.default_credential_id:
             token = await self._resolve_token(repo.default_credential_id, repo)
         if repo.source_type == "upload":
             from src.webapi.ingestion import upload_archive_path, upload_tree_dir

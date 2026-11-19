@@ -56,7 +56,7 @@ class Credential(Base):
     owner_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id"), nullable=False, index=True
     )
-    kind: Mapped[str] = mapped_column(String(32), nullable=False)  # gitlab_token | cookie_header
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)  # gitlab_token | github_token | cookie_header
     label: Mapped[str] = mapped_column(String(200), nullable=False)
     secret_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     gitlab_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -108,9 +108,10 @@ class Repository(Base):
         ForeignKey("users.id"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    source_type: Mapped[str] = mapped_column(String(16), nullable=False)  # upload | gitlab
+    source_type: Mapped[str] = mapped_column(String(16), nullable=False)  # upload | gitlab | github
     gitlab_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     gitlab_project_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    github_project_id: Mapped[str | None] = mapped_column(String(100), nullable=True)  # "owner/repo" for source_type=github
     default_credential_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("credentials.id"), nullable=True
     )
@@ -293,7 +294,7 @@ class Schedule(Base):
         ForeignKey("jobs.id"), nullable=False, index=True
     )
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # once|recurring|gitlab_mr
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # once|recurring|gitlab_mr|pull_request
     cron: Mapped[str | None] = mapped_column(String(100), nullable=True)  # recurring only
     run_at: Mapped[datetime | None] = mapped_column(  # one-off (kind='once')
         DateTime(timezone=True), nullable=True

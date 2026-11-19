@@ -114,14 +114,14 @@ def _write_cache(repo_id: str, paths: list[str], truncated: bool) -> int:
     return len(paths)
 
 
-def capture_gitlab_tree(repo_id: str, gitlab_url: str, token: str | None) -> int:
-    """Capture a GitLab repo's file tree WITHOUT a full checkout — a blobless, no-checkout
+def capture_remote_tree(repo_id: str, remote_url: str, token: str | None) -> int:
+    """Capture a GitLab/GitHub repo's file tree WITHOUT a full checkout — a blobless, no-checkout
     shallow clone (fetches tree objects only, not file contents) + ``git ls-tree``. This
     lets the file browser work before the first scan and after scan checkouts are cleaned,
     independent of the ephemeral scan workspace. Best-effort; raises on failure."""
     from src.webapi.ingestion import GIT_PROTOCOL_ENV, build_clone_url
 
-    clone_url = build_clone_url(gitlab_url, token or "")
+    clone_url = build_clone_url(remote_url, token or "")
     tmp = tempfile.mkdtemp(prefix="vigilo-tree-")
     env = {**os.environ, **GIT_PROTOCOL_ENV}
     try:
@@ -161,3 +161,7 @@ def read_repo_tree(repo_id: str) -> dict | None:
     except (ValueError, OSError):
         pass
     return None
+
+
+# Backward-compat alias: older callers import capture_gitlab_tree.
+capture_gitlab_tree = capture_remote_tree
