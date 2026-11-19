@@ -118,8 +118,9 @@ async def execute(
         "opencode", "run",
         "--model", model,
         "--format", "json",
-        "--dangerously-skip-permissions",
-        "--dir", cwd,
+        # OpenCode 2.x CLI: --dangerously-skip-permissions/--dir were removed;
+        # --auto auto-approves permissions and the cwd is passed to the subprocess.
+        "--auto",
         prompt,
     ]
 

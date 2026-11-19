@@ -70,6 +70,26 @@ RUN gem install addressable -v 2.8.9
 # won't run otherwise, leaving a stub that fails with "Exec format error".
 RUN npm install -g --allow-scripts=@anthropic-ai/claude-code \
     @anthropic-ai/claude-code @openai/codex@0.142.5 @playwright/cli@0.1.1
+# OpenCode CLI 2.x — official static glibc binary. wolfi-base:latest is glibc,
+# not musl (/lib/ld-linux-aarch64.so.1 exists, /lib/ld-musl-*.so.1 does not,
+# and installing musl conflicts with glibc), so the glibc asset runs natively,
+# no patchelf. Verified in-container: the musl asset fails ("not found"), the
+# glibc asset starts (opencode v2.3.0).
+# npm "opencode-ai" only ships 1.x and its postinstall leaves a dead stub on
+# npm>=12, hence the pinned release tarball + SHA256 check (upstream SHA256SUMS).
+ARG OPENCODE_VERSION=2.3.0
+RUN ARCH=$(uname -m) && \
+    case "$ARCH" in \
+      aarch64) OC_ARCH=arm64; OC_SHA=3207fb5cdec448d479242c0f1a14f4f7bdfcad3a79209b5eb8f9003725e93711 ;; \
+      x86_64)  OC_ARCH=x64;   OC_SHA=fc0f81522aceeabac47693d88389efa2bc517ce74c2c38fd6967819fcc6e4d3b ;; \
+      *) echo "unsupported arch $ARCH" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-${OC_ARCH}.tar.gz" -o /tmp/oc.tar.gz && \
+    echo "${OC_SHA}  /tmp/oc.tar.gz" | sha256sum -c - && \
+    mkdir -p /usr/local/bin && \
+    tar xzf /tmp/oc.tar.gz -C /usr/local/bin && \
+    chmod +x /usr/local/bin/opencode && rm /tmp/oc.tar.gz && \
+    opencode --version
 # The playwright-cli skill must live under EACH CLI's own skill-discovery path,
 # else the executor not matching the install path never sees it and falls back
 # to raw HTTP. Claude scans /tmp/.claude/skills; Codex scans $CODEX_HOME/skills
