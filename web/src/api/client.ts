@@ -228,7 +228,6 @@ export const api = {
   me: () => request<User>("/users/me"),
   repositories: (includeArchived = false) =>
     request<Repository[]>(`/repositories${includeArchived ? "?include_archived=true" : ""}`),
-  createRepository: (body: Partial<Repository> & { gitlab_token?: string; push_patches?: boolean }) =>
   createRepository: (body: Partial<Repository> & { gitlab_token?: string; github_token?: string; push_patches?: boolean }) =>
     request<Repository>("/repositories", { method: "POST", body: JSON.stringify(body) }),
   deleteRepository: (id: string) =>
