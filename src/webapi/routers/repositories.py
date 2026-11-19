@@ -42,7 +42,10 @@ from src.webapi.engine.base import ExecutionEngine
 from src.webapi.engine.provider import get_engine
 from urllib.parse import urlparse
 
-from src.webapi.credential_guard import CredentialRejected, validate_gitlab_credential
+from src.webapi.credential_guard import (
+    CredentialRejected,
+    validate_repo_credential,
+)
 from src.webapi.models import (
     ROLE_ADMIN,
     Credential,
@@ -157,7 +160,8 @@ async def _validate_gitlab_bg(repo_id: uuid.UUID) -> None:
             if repo.default_credential_id:
                 cred = await session.get(Credential, repo.default_credential_id)
                 if cred is not None:
-                    validate_gitlab_credential(cred, repo.created_by, repo.gitlab_url)
+                    validate_repo_credential(cred, repo.created_by, repo.gitlab_url,
+                                             repo.source_type)
                 token = build_vault(get_settings()).decrypt(cred.secret_enc) if cred else None
         try:
             await _asyncio.to_thread(validate_gitlab_access, url, token)  # read/access check
@@ -198,7 +202,8 @@ async def create_repository(
         if cred is None or cred.owner_id != user.id:
             raise HTTPException(status_code=400, detail="Unknown or non-owned credential")
         try:
-            validate_gitlab_credential(cred, user.id, payload.gitlab_url)
+            validate_repo_credential(cred, user.id, payload.gitlab_url,
+                                     payload.source_type)
         except CredentialRejected as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     if payload.push_patches and payload.source_type not in ("gitlab", "github"):
@@ -284,7 +289,8 @@ async def repository_tree(
                     from src.webapi.security.vault import build_vault
                     cred = await session.get(Credential, repo.default_credential_id)
                     if cred is not None:
-                        validate_gitlab_credential(cred, repo.created_by, repo.gitlab_url)
+                        validate_repo_credential(cred, repo.created_by, repo.gitlab_url,
+                                                 repo.source_type)
                     token = build_vault(get_settings()).decrypt(cred.secret_enc) if cred else None
                 capture_gitlab_tree(str(repo_id), repo.gitlab_url, token)
         except Exception as exc:
@@ -317,8 +323,9 @@ async def update_repository(
             cred = await session.get(Credential, new_cred_id)
             try:
                 # Must belong to the repository's owner (never to a third user), be a
-                # GitLab token, and be bound to this repository's host.
-                validate_gitlab_credential(cred, repo.created_by, repo.gitlab_url)
+                # token of the repository's forge, and be bound to this repository's host.
+                validate_repo_credential(cred, repo.created_by, repo.gitlab_url,
+                                         repo.source_type)
             except CredentialRejected as exc:
                 raise HTTPException(status_code=400, detail=f"Unknown or non-owned credential: {exc}")
         repo.default_credential_id = new_cred_id

@@ -4,7 +4,7 @@ GitHub source type ("github") alongside upload/gitlab. The repo URL column stays
 gitlab_url (generic remote URL, keeps migrations minimal); github_project_id holds
 "owner/repo" for webhook matching (GitHub sends the repo full_name, not a numeric id).
 
-Revision ID: 0008_github_source
+Revision ID: 0009_github_source
 """
 import sqlalchemy as sa
 from alembic import op
