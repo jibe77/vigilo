@@ -108,11 +108,14 @@ async def build_run_extras(run: Run, job: Any, repo: Repository, token: str | No
     just in time over the internal API. Raises if the record cannot be stored (the
     caller must treat that as a failed start)."""
     extras: dict = {}
-    if repo.source_type == "gitlab" and repo.gitlab_url:
-        extras["source"] = {"remote_url": repo.gitlab_url, "commit": run.commit_sha or None}
+    if repo.source_type in ("gitlab", "github") and repo.gitlab_url:
+        extras["source"] = {"remote_url": repo.gitlab_url, "commit": run.commit_sha or None,
+                            "forge": repo.source_type}
     bundle: dict[str, str] = {}
     if repo.push_patches:
-        if repo.source_type == "gitlab" and token:
+        if repo.source_type in ("gitlab", "github") and token:
+            # The bundle key is historical: it holds the forge token of either
+            # forge; delivery routes MR/PR creation from source["forge"].
             bundle["gitlab_token"] = token
             extras["push"] = {"enabled": True}
         else:
@@ -220,9 +223,9 @@ def build_model_overrides(admin: Any, repo: Repository) -> dict:
 
 
 def capture_source_info(run: Run, repo: Repository, repo_dir: str) -> None:
-    """Best-effort: commit SHA of a GitLab checkout + a persistent browse-only file
+    """Best-effort: commit SHA of a git (GitLab/GitHub) checkout + a persistent browse-only file
     tree (the checkout is deleted after the run, so grab both now)."""
-    if repo.source_type == "gitlab":
+    if repo.source_type in ("gitlab", "github"):
         try:
             import subprocess
             out = subprocess.run(

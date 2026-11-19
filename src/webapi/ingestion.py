@@ -3,9 +3,11 @@
 Two sources:
 - **upload** — extract a user-provided archive (zip / tar.gz), with path-traversal
   guards (uploads are semi-trusted but we never trust archive member names).
-- **gitlab** — shallow ``git clone`` over HTTPS with the owner's token injected into
-  the URL. The token is NEVER left on disk or in logs (``origin`` is reset to the clean URL): the ``.vigilo-remote-url``
-  marker records the CLEAN url (no credentials), and clone errors are scrubbed.
+- **gitlab** / **github** — shallow ``git clone`` over HTTPS with the owner's token
+  injected into the URL (``oauth2:`` basic auth works for GitLab PATs and for
+  GitHub PATs / fine-grained tokens on github.com). The token is NEVER written to
+  disk or logs: the ``.vigilo-remote-url`` marker records the CLEAN url (no
+  credentials), and clone errors are scrubbed.
 """
 from __future__ import annotations
 
@@ -198,7 +200,7 @@ def build_clone_url(gitlab_url: str, token: str) -> str:
 
 
 def validate_gitlab_access(gitlab_url: str, token: str | None, runner=subprocess.run) -> int:
-    """Verify a GitLab repo is reachable + the token grants access, WITHOUT a full
+    """Verify a GitLab/GitHub repo is reachable + the token grants access, WITHOUT a full
     clone, via ``git ls-remote``. Returns the number of refs. Raises RuntimeError on
     failure (token scrubbed from the message)."""
     clone_url = build_clone_url(gitlab_url, token or "")
@@ -278,9 +280,9 @@ def prepare_repo(
             copy_tree(upload_path, repo_dir)
         else:
             extract_archive(upload_path, repo_dir)
-    elif source_type == "gitlab":
+    elif source_type in ("gitlab", "github"):
         if not gitlab_url:
-            raise ValueError("gitlab source requires gitlab_url")
+            raise ValueError(f"{source_type} source requires a remote URL")
         clone_url = build_clone_url(gitlab_url, token or "")
         clone_repo(clone_url, repo_dir)
         try:

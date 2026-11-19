@@ -268,10 +268,11 @@ function AddRepoModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
       const repo = await api.createRepository({
         name,
         source_type: sourceType,
-        gitlab_url: sourceType === "gitlab" ? gitlabUrl : null,
+        gitlab_url: sourceType === "gitlab" || sourceType === "github" ? gitlabUrl : null,
+        github_project_id: sourceType === "github" ? gitlabUrl.replace(/\.git$/, "").replace(/\/$/, "").replace("https://github.com/", "") : null,
         is_private: isPrivate,
-        ...(sourceType === "gitlab"
-          ? { gitlab_token: gitlabToken || undefined, push_patches: pushPatches }
+        ...((sourceType === "gitlab" || sourceType === "github")
+          ? { [sourceType === "github" ? "github_token" : "gitlab_token"]: gitlabToken || undefined, push_patches: pushPatches }
           : {}),
       });
       // Upload returns immediately; ingestion runs in the background (repo shows
@@ -309,18 +310,19 @@ function AddRepoModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
             <select id="repo-source" className="field" value={sourceType} onChange={(e) => setSourceType(e.target.value)}>
               <option value="upload">Upload</option>
               <option value="gitlab">GitLab</option>
+              <option value="github">GitHub</option>
             </select>
           </div>
-          {sourceType === "gitlab" && (
+          {(sourceType === "gitlab" || sourceType === "github") && (
             <>
               <div>
-                <label htmlFor="repo-gitlab-url" className="mb-1 block text-sm text-slate">GitLab URL</label>
+                <label htmlFor="repo-gitlab-url" className="mb-1 block text-sm text-slate">{sourceType === "github" ? "GitHub URL" : "GitLab URL"}</label>
                 <input
                   id="repo-gitlab-url"
                   className="field"
                   value={gitlabUrl}
                   onChange={(e) => setGitlabUrl(e.target.value)}
-                  placeholder="https://gitlab.internal/group/project.git"
+                  placeholder={sourceType === "github" ? "https://github.com/owner/repo.git" : "https://gitlab.internal/group/project.git"}
                 />
               </div>
               <div>
@@ -343,7 +345,7 @@ function AddRepoModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
               </div>
               <label className="flex items-center gap-2 text-sm text-slate">
                 <input type="checkbox" checked={pushPatches} onChange={(e) => setPushPatches(e.target.checked)} />
-                Push fix branches / MRs back to GitLab (uses the deployment's GitLab token)
+                Push fix branches / {sourceType === "github" ? "PRs" : "MRs"} back to {sourceType === "github" ? "GitHub" : "GitLab"} (uses the deployment's token)
               </label>
             </>
           )}

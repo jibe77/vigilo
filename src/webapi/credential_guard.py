@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from src.webapi.models import Credential
 
 GITLAB_KIND = "gitlab_token"
+GITHUB_KIND = "github_token"
 COOKIE_KIND = "cookie_header"
 
 
@@ -53,6 +54,34 @@ def validate_gitlab_credential(
         raise CredentialRejected("Credential is not a GitLab token")
     if repo_url and not hosts_match(cred.gitlab_base_url, repo_url):
         raise CredentialRejected("Credential is bound to a different GitLab host")
+
+
+def validate_github_credential(
+    cred: Credential | None, owner_id: uuid.UUID | None, repo_url: str | None
+) -> None:
+    """Raise :class:`CredentialRejected` unless ``cred`` is a github_token owned by
+    ``owner_id`` and (when it records a base URL) bound to ``repo_url``'s host."""
+    if cred is None:
+        raise CredentialRejected("Unknown credential")
+    if owner_id is None or cred.owner_id != owner_id:
+        raise CredentialRejected("Credential is not owned by the repository owner")
+    if cred.kind != GITHUB_KIND:
+        raise CredentialRejected("Credential is not a GitHub token")
+    if repo_url and not hosts_match(cred.gitlab_base_url, repo_url):
+        raise CredentialRejected("Credential is bound to a different host")
+
+
+def validate_repo_credential(
+    cred: Credential | None, owner_id: uuid.UUID | None, repo_url: str | None,
+    source_type: str,
+) -> None:
+    """Kind check dispatched on the repository's source type: a GitHub repository
+    must carry a github_token, a GitLab one a gitlab_token. Upload sources never
+    reach this (no credential), but default to the GitLab check."""
+    if source_type == "github":
+        validate_github_credential(cred, owner_id, repo_url)
+    else:
+        validate_gitlab_credential(cred, owner_id, repo_url)
 
 
 def validate_cookie_credential(cred: Credential | None, owner_id: Any) -> None:

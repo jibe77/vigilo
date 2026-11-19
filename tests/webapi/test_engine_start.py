@@ -174,7 +174,8 @@ class TestTemporalEngine:
             monkeypatch, tmp_path, _repo(push_patches=True, **GITLAB_REPO), token="glpat-secret")
         payload = client.start_workflow.call_args.args[1]
         assert payload["push"] == {"enabled": True}
-        assert payload["source"] == {"remote_url": "https://gl.example/g/x.git", "commit": None}
+        assert payload["source"] == {"remote_url": "https://gl.example/g/x.git", "commit": None,
+                                     "forge": "gitlab"}
         assert set(payload["secrets"]) == {"ref", "key"} and payload["secrets"]["ref"] == str(run.id)
         assert "auth" not in payload
         assert "glpat-secret" not in repr(client.start_workflow.call_args)

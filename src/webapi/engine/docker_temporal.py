@@ -48,7 +48,7 @@ class DockerTemporalEngine:
         """Decrypt the repository owner's GitLab token. Re-checks owner, kind and host
         binding right before decrypting; a failing check aborts the run start."""
         from src.webapi.db import _session_maker
-        from src.webapi.credential_guard import CredentialRejected, validate_gitlab_credential
+        from src.webapi.credential_guard import CredentialRejected, validate_repo_credential
         from src.webapi.models import Credential
         from src.webapi.security.vault import build_vault
 
@@ -57,7 +57,8 @@ class DockerTemporalEngine:
             if cred is None:
                 return None
             try:
-                validate_gitlab_credential(cred, repo.created_by, repo.gitlab_url)
+                validate_repo_credential(cred, repo.created_by, repo.gitlab_url,
+                                         repo.source_type)
             except CredentialRejected as exc:
                 raise RuntimeError(f"Repository credential refused: {exc}") from exc
             return build_vault(get_settings()).decrypt(cred.secret_enc)
@@ -78,7 +79,7 @@ class DockerTemporalEngine:
         # Materialize the source into repo_dir (extract upload / clone GitLab).
         token = None
         upload_path = None
-        if repo.source_type == "gitlab" and repo.default_credential_id:
+        if repo.source_type in ("gitlab", "github") and repo.default_credential_id:
             token = await self._resolve_token(repo.default_credential_id, repo)
         if repo.source_type == "upload":
             from src.webapi.ingestion import upload_archive_path, upload_tree_dir

@@ -42,7 +42,10 @@ from src.webapi.engine.base import ExecutionEngine
 from src.webapi.engine.provider import get_engine
 from urllib.parse import urlparse
 
-from src.webapi.credential_guard import CredentialRejected, validate_gitlab_credential
+from src.webapi.credential_guard import (
+    CredentialRejected,
+    validate_repo_credential,
+)
 from src.webapi.models import (
     ROLE_ADMIN,
     RUN_TERMINAL,
@@ -71,6 +74,7 @@ def _to_read(r: Repository) -> RepositoryRead:
     return RepositoryRead(
         id=r.id, created_by=r.created_by, name=r.name, source_type=r.source_type,
         gitlab_url=r.gitlab_url, gitlab_project_id=r.gitlab_project_id,
+        github_project_id=r.github_project_id,
         default_credential_id=r.default_credential_id,
         has_webhook=bool(r.webhook_secret), is_private=r.is_private,
         upload_ready=r.upload_ready, push_patches=r.push_patches,
@@ -120,14 +124,14 @@ async def _require_owner_or_admin(session, user, repo_id) -> Repository:
     return repo
 
 
-async def _make_gitlab_credential(session, user, label, token, base_url):
-    """Encrypt a pasted GitLab token as a per-user credential; return its id."""
+async def _make_gitlab_credential(session, user, label, token, base_url, kind="gitlab_token"):
+    """Encrypt a pasted GitLab/GitHub token as a per-user credential; return its id."""
     from src.webapi.security.vault import build_vault
     if base_url and (urlparse(base_url).scheme or "https").lower() != "https":
         raise HTTPException(status_code=400,
                             detail="A GitLab token can only be used with an https:// URL")
     cred = Credential(
-        owner_id=user.id, kind="gitlab_token", label=label[:200],
+        owner_id=user.id, kind=kind, label=label[:200],
         secret_enc=build_vault(get_settings()).encrypt(token),
         gitlab_base_url=base_url,
     )
@@ -137,7 +141,7 @@ async def _make_gitlab_credential(session, user, label, token, base_url):
 
 
 async def _validate_gitlab_bg(repo_id: uuid.UUID) -> None:
-    """Background: verify the repo's access token can reach the GitLab repo
+    """Background: verify the repo's access token can reach the GitLab/GitHub repo
     (`git ls-remote`), capture its browse-only file tree, and ALWAYS resolve
     ingestion_status to ready/failed. Previously an exception outside the inner
     try (e.g. a decrypt/DB error) left the status stuck at 'importing' forever —
@@ -159,7 +163,8 @@ async def _validate_gitlab_bg(repo_id: uuid.UUID) -> None:
             if repo.default_credential_id:
                 cred = await session.get(Credential, repo.default_credential_id)
                 if cred is not None:
-                    validate_gitlab_credential(cred, repo.created_by, repo.gitlab_url)
+                    validate_repo_credential(cred, repo.created_by, repo.gitlab_url,
+                                             repo.source_type)
                 token = build_vault(get_settings()).decrypt(cred.secret_enc) if cred else None
         try:
             await _asyncio.to_thread(validate_gitlab_access, url, token)  # read/access check
@@ -200,34 +205,39 @@ async def create_repository(
         if cred is None or cred.owner_id != user.id:
             raise HTTPException(status_code=400, detail="Unknown or non-owned credential")
         try:
-            validate_gitlab_credential(cred, user.id, payload.gitlab_url)
+            validate_repo_credential(cred, user.id, payload.gitlab_url,
+                                     payload.source_type)
         except CredentialRejected as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-    if payload.push_patches and payload.source_type != "gitlab":
+    if payload.push_patches and payload.source_type not in ("gitlab", "github"):
         raise HTTPException(status_code=400,
-                            detail="push_patches requires a GitLab source")
+                            detail="push_patches requires a GitLab or GitHub source")
     cred_id = payload.default_credential_id
     # A pasted token is encrypted as a credential and linked to this repo.
-    if payload.source_type == "gitlab" and payload.gitlab_token:
-        cred_id = await _make_gitlab_credential(
-            session, user, f"{payload.name} GitLab token",
-            payload.gitlab_token, payload.gitlab_url,
-        )
-    is_gitlab = payload.source_type == "gitlab"
+    if payload.source_type in ("gitlab", "github"):
+        token = payload.gitlab_token or payload.github_token
+        kind = "gitlab_token" if payload.source_type == "gitlab" else "github_token"
+        if token:
+            cred_id = await _make_gitlab_credential(
+                session, user, f"{payload.name} {payload.source_type} token",
+                token, payload.gitlab_url, kind=kind,
+            )
+    is_remote = payload.source_type in ("gitlab", "github")
     repo = Repository(
         created_by=user.id, name=payload.name, source_type=payload.source_type,
         gitlab_url=payload.gitlab_url, gitlab_project_id=payload.gitlab_project_id,
+        github_project_id=getattr(payload, "github_project_id", None),
         default_credential_id=cred_id,
         is_private=payload.is_private, scan_config=payload.scan_config or {},
         push_patches=payload.push_patches,
-        # GitLab: validate access in the background (importing → ready/failed).
+        # Remote (GitLab/GitHub): validate access in the background (importing → ready/failed).
         # Upload: stays idle until source is attached.
-        ingestion_status="importing" if is_gitlab else "idle",
+        ingestion_status="importing" if is_remote else "idle",
     )
     session.add(repo)
     await session.commit()
     await session.refresh(repo)
-    if is_gitlab:
+    if is_remote:
         background.add_task(_validate_gitlab_bg, repo.id)
     return _to_read(repo)
 
@@ -279,21 +289,22 @@ async def repository_tree(
                 src = archive if os.path.isfile(archive) else upload_tree_dir(uploads, str(repo_id))
                 if os.path.exists(src):
                     capture_repo_tree(str(repo_id), src)
-            elif repo.source_type == "gitlab" and repo.gitlab_url:
+            elif repo.source_type in ("gitlab", "github") and repo.gitlab_url:
                 token = None
                 if repo.default_credential_id:
                     from src.webapi.security.vault import build_vault
                     cred = await session.get(Credential, repo.default_credential_id)
                     if cred is not None:
-                        validate_gitlab_credential(cred, repo.created_by, repo.gitlab_url)
+                        validate_repo_credential(cred, repo.created_by, repo.gitlab_url,
+                                                 repo.source_type)
                     token = build_vault(get_settings()).decrypt(cred.secret_enc) if cred else None
                 capture_gitlab_tree(str(repo_id), repo.gitlab_url, token)
         except Exception as exc:
             logger.warning("tree backfill failed for repo %s: %s", repo_id, exc)
         tree = read_repo_tree(str(repo_id))
     if tree is None:
-        msg = ("Couldn't read the repository source — check the GitLab URL/token is valid "
-               "and the host is reachable." if repo.source_type == "gitlab"
+        msg = ("Couldn't read the repository source — check the remote URL/token is valid "
+               "and the host is reachable." if repo.source_type in ("gitlab", "github")
                else "No source uploaded yet.")
         return {"available": False, "paths": [], "truncated": False, "count": 0, "message": msg}
     return {"available": True, **tree}
@@ -318,17 +329,21 @@ async def update_repository(
             cred = await session.get(Credential, new_cred_id)
             try:
                 # Must belong to the repository's owner (never to a third user), be a
-                # GitLab token, and be bound to this repository's host.
-                validate_gitlab_credential(cred, repo.created_by, repo.gitlab_url)
+                # token of the repository's forge, and be bound to this repository's host.
+                validate_repo_credential(cred, repo.created_by, repo.gitlab_url,
+                                         repo.source_type)
             except CredentialRejected as exc:
                 raise HTTPException(status_code=400, detail=f"Unknown or non-owned credential: {exc}")
         repo.default_credential_id = new_cred_id
     # A pasted token replaces the linked credential and triggers re-validation.
-    if data.get("gitlab_token"):
-        if repo.source_type != "gitlab":
-            raise HTTPException(status_code=400, detail="Token only applies to GitLab repos")
+    new_token = data.get("gitlab_token") or data.get("github_token")
+    if new_token:
+        if repo.source_type not in ("gitlab", "github"):
+            raise HTTPException(status_code=400, detail="Token only applies to remote (GitLab/GitHub) repos")
+        kind = "gitlab_token" if repo.source_type == "gitlab" else "github_token"
         repo.default_credential_id = await _make_gitlab_credential(
-            session, user, f"{repo.name} GitLab token", data["gitlab_token"], repo.gitlab_url,
+            session, user, f"{repo.name} {repo.source_type} token", new_token,
+            repo.gitlab_url, kind=kind,
         )
         repo.ingestion_status = "importing"
         repo.ingestion_error = None
@@ -357,10 +372,10 @@ async def update_repository(
                 )
         repo.archived = data["archived"]
     if data.get("push_patches") is not None:
-        if data["push_patches"] and repo.source_type != "gitlab":
+        if data["push_patches"] and repo.source_type not in ("gitlab", "github"):
             raise HTTPException(
                 status_code=400,
-                detail="push_patches requires a GitLab source with a write-scoped token",
+                detail="push_patches requires a GitLab or GitHub source with a write-scoped token",
             )
         repo.push_patches = data["push_patches"]
     if data.get("pipeline_config") is not None:
@@ -519,6 +534,12 @@ async def issue_webhook(
     repo = await _require_owner_or_admin(session, user, repo_id)
     repo.webhook_secret = secrets.token_urlsafe(32)
     await session.commit()
+    if repo.source_type == "github":
+        return {
+            "webhook_url": "/api/v1/webhooks/github",
+            "secret": repo.webhook_secret,
+            "note": "Add this as a Pull Request events webhook (application/json, X-Hub-Signature-256) with the secret.",
+        }
     return {
         "webhook_url": "/api/v1/webhooks/gitlab",
         "secret": repo.webhook_secret,

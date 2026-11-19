@@ -135,30 +135,37 @@ _SCAN_KEYS = {"description", "focus", "avoid"}
 
 class RepositoryCreate(BaseModel):
     name: str
-    source_type: Literal["upload", "gitlab"]
+    source_type: Literal["upload", "gitlab", "github"]
+    # gitlab_url doubles as the generic remote clone URL (also for github sources,
+    # e.g. https://github.com/owner/repo.git) — kept under the gitlab_* names to
+    # avoid a schema migration of every reader.
     gitlab_url: str | None = None
     gitlab_project_id: str | None = None
+    github_project_id: str | None = None  # "owner/repo" for source_type=github (webhook matching)
     default_credential_id: uuid.UUID | None = None
     is_private: bool = False
     scan_config: dict = {}
-    # Convenience for the UI: a GitLab access token pasted at create time. The
+    # Convenience for the UI: a GitLab/GitHub access token pasted at create time. The
     # server encrypts it as a per-user credential and links it as this repo's
     # default_credential_id (never stored in the clear). Use a write-scoped token
     # if you also enable push_patches.
     gitlab_token: str | None = None
+    github_token: str | None = None
     push_patches: bool = False
 
     @model_validator(mode="after")
     def _gitlab_needs_url(self):
-        if self.source_type == "gitlab":
+        if self.source_type in ("gitlab", "github"):
             if not self.gitlab_url:
-                raise ValueError("gitlab_url is required when source_type='gitlab'")
+                raise ValueError(f"gitlab_url is required when source_type={self.source_type!r}")
             # Reject non-web schemes up front (file://, ext::, ssh://, …) — otherwise a
             # user could point the clone at a local repo or an internal host (SSRF/LFI).
             from urllib.parse import urlparse
             scheme = (urlparse(self.gitlab_url).scheme or "https").lower()
             if scheme not in ("https", "http"):
-                raise ValueError(f"gitlab_url must be an http(s) URL (got {scheme!r})")
+                raise ValueError(f"remote URL must be an http(s) URL (got {scheme!r})")
+            if self.source_type == "github" and urlparse(self.gitlab_url).netloc != "github.com":
+                raise ValueError("github source requires a github.com URL")
             from src.webapi.ingestion import reject_embedded_credentials
             reject_embedded_credentials(self.gitlab_url)
         return self
@@ -179,6 +186,7 @@ class RepositoryRead(BaseModel):
     source_type: str
     gitlab_url: str | None
     gitlab_project_id: str | None
+    github_project_id: str | None
     default_credential_id: uuid.UUID | None
     has_webhook: bool
     is_private: bool
@@ -214,8 +222,9 @@ class RepositoryUpdate(BaseModel):
     archived: bool | None = None
     pipeline_config: dict | None = None
     scan_config: dict | None = None
-    # Add/replace the GitLab access token (encrypted as a new credential + linked).
+    # Add/replace the GitLab/GitHub access token (encrypted as a new credential + linked).
     gitlab_token: str | None = None
+    github_token: str | None = None
 
     @field_validator("pipeline_config")
     @classmethod
@@ -356,7 +365,7 @@ class RunRead(BaseModel):
 
 class ScheduleCreate(BaseModel):
     job_id: uuid.UUID
-    kind: Literal["once", "recurring", "gitlab_mr"]
+    kind: Literal["once", "recurring", "gitlab_mr", "pull_request"]
     cron: str | None = None
     run_at: datetime | None = None
     enabled: bool = True

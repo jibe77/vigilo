@@ -141,16 +141,16 @@ export function RepoSettingsDrawer({
           </section>
         )}
 
-        {repo.source_type === "gitlab" && (
+        {repo.source_type !== "upload" && (
           <section className="mb-6">
             <label className="flex items-center gap-3">
               <input type="checkbox" checked={pushPatches}
                      onChange={(e) => setPushPatches(e.target.checked)} />
               <span className="text-sm">
-                <span className="font-medium">Push patches back to GitLab</span>
+                <span className="font-medium">Push patches back to the remote forge</span>
                 <span className="block text-slate">
                   On remediation, push fix branches and open merge requests. Push-back uses the
-                  deployment's configured GitLab token (server-side, write-scoped) — not the
+                  deployment's configured forge token (server-side, write-scoped) — not the
                   per-repository access token below.
                 </span>
               </span>

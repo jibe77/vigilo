@@ -126,6 +126,15 @@ def _clean_remote_url(remote_url: str) -> str:
     return clean
 
 
+def _github_remote(url: str) -> bool:
+    """True when the remote lives on github.com (pull requests instead of merge
+    requests). Fallback when the run input carries no explicit ``forge``."""
+    try:
+        return (urlparse(url).hostname or "").lower() == "github.com"
+    except ValueError:
+        return False
+
+
 def _require_https_for_token(url: str) -> None:
     """A token is only ever sent over https (never http, file, ssh)."""
     if (urlparse(url).scheme or "").lower() != "https":
@@ -737,11 +746,19 @@ async def _deliver_locked(
         need_mr = pushed_now + to_mr
         if need_mr:
             try:
-                from src.services.gitlab_mr import create_remediation_mrs
+                forge = (source or {}).get("forge") or ""
+                if forge == "github" or (not forge and _github_remote(push_url)):
+                    from src.services.github_pr import create_remediation_prs
 
-                mrs = await create_remediation_mrs(
-                    repo_path, session_id, need_mr, token=token, remote_url=push_url,
-                )
+                    mrs = await create_remediation_prs(
+                        repo_path, session_id, need_mr, token=token, remote_url=push_url,
+                    )
+                else:
+                    from src.services.gitlab_mr import create_remediation_mrs
+
+                    mrs = await create_remediation_mrs(
+                        repo_path, session_id, need_mr, token=token, remote_url=push_url,
+                    )
                 state = _load_state(repo_path)
                 for mr in mrs.get("created", []):
                     st = state.setdefault(mr["branch"], {"commit": tips.get(mr["branch"]), "pushed": True})
