@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, getToken, type Job, type Run, type TraceRailConfig } from "../api/client";
+import { ReportDownloadMenu, type ReportFormat } from "../components/ReportDownloadMenu";
 import { TraceRail, type RailPhase } from "../components/TraceRail";
 import { StatusDot } from "../components/StatusDot";
 
@@ -225,6 +226,29 @@ export function RunDetail() {
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
+  async function downloadReport(format: ReportFormat) {
+    const ext = format === "markdown" ? "md" : format;
+    // markdown is a stored artifact; docx/pdf are rendered server-side from it.
+    const url = format === "markdown"
+      ? `/api/runs/${id}/artifacts/report_md`
+      : `/api/runs/${id}/report/export/${format}`;
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${getToken()}` } });
+    if (!resp.ok) {
+      setDownloadError(`Download failed (${resp.status})`);
+      return;
+    }
+    setDownloadError(null);
+    const blob = await resp.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = `vigilo-report-${id?.slice(0, 8)}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(objUrl), 10_000);
+  }
+
   if (error && !run) return <p className="text-sm text-severity-critical">Could not load run: {error}</p>;
   if (!run) return <p className="text-slate">Loading…</p>;
 
@@ -361,12 +385,7 @@ export function RunDetail() {
                   Download patches (.zip)
                 </button>
               )}
-              <button
-                className="btn-ghost py-1"
-                onClick={() => downloadArtifact("report_md", `vigilo-report-${id?.slice(0, 8)}.md`)}
-              >
-                Download
-              </button>
+              <ReportDownloadMenu onDownload={downloadReport} />
             </div>
           </div>
           <div className="markdown max-h-[640px] overflow-auto break-words p-6">

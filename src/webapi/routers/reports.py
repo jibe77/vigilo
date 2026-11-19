@@ -5,13 +5,14 @@ import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.webapi.acl import require_run_access
 from src.webapi.auth.deps import current_active_user
 from src.webapi.db import get_async_session
 from src.webapi.models import Run, User
+from src.webapi.report_export import export_report
 from src.webapi.reports import (
     BUNDLE_KIND,
     PATCHES_KIND,
@@ -43,6 +44,39 @@ async def get_report(
     run = await _run_or_404(run_id, session, user)
     markdown = read_report(run.data_dir, run.session_id)
     return {"exists": markdown is not None, "markdown": markdown or ""}
+
+
+@router.get("/runs/{run_id}/report/export/{export}", response_model=None)
+async def export_report_file(
+    run_id: uuid.UUID,
+    export: str,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> Response:
+    """Render the deliverables report as ``docx`` or ``pdf`` (images embedded).
+
+    Built on demand from the stored Markdown: no artifact is written to disk, so
+    the run directory stays untouched and the export always matches the report.
+    """
+    if export not in ("docx", "pdf"):
+        raise HTTPException(status_code=404, detail="Unsupported export format")
+    run = await _run_or_404(run_id, session, user)
+    try:
+        exported = export_report(export, run.data_dir, run.session_id)
+    except Exception as exc:  # noqa: BLE001 — surface a 500 with a usable message
+        raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
+    if exported is None:
+        raise HTTPException(status_code=404, detail="Report not available for this run")
+    blob, media_type, ext = exported
+    return Response(
+        content=blob,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="vigilo-report-{str(run.id)[:8]}.{ext}"'
+            ),
+        },
+    )
 
 
 @router.get("/runs/{run_id}/artifacts")
