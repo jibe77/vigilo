@@ -17,7 +17,8 @@ import logging
 import os
 import re
 
-from src.webapi.reports import REPORT_FILENAME, deliverables_dir
+from src.webapi import safefs
+from src.webapi.reports import REPORT_FILENAME, _deliverable_parts, deliverables_dir
 
 log = logging.getLogger(__name__)
 
@@ -90,6 +91,19 @@ def _sanitize_for_pdf(text: str, font_path: str) -> str:
 
 def _is_image(path: str) -> bool:
     return os.path.isfile(path) and os.path.getsize(path) > 0
+
+
+def _safe_image_path(data_dir: str, session_id: str, src: str) -> str | None:
+    """Resolve a report-relative image path, refusing anything that escapes the
+    run's deliverables/ (the markdown is agent-written, so ``src`` is hostile:
+    ``../../etc/passwd`` must not end up embedded in the export)."""
+    parts = [p for p in src.replace("\\", "/").split("/") if p not in ("", ".")]
+    if any(p == ".." for p in parts):
+        return None
+    base = deliverables_dir(data_dir, session_id)
+    if not safefs.is_safe_file(base, *parts):
+        return None
+    return os.path.join(base, *parts)
 
 
 # ── shared inline handling ───────────────────────────────────────────────────
@@ -268,8 +282,8 @@ def build_report_docx(data_dir: str, session_id: str) -> bytes | None:
         elif block.kind == "hr":
             doc.add_paragraph().paragraph_format.space_after = Pt(2)
         elif block.kind == "image":
-            target = os.path.join(base_dir, block.src)
-            if not _is_image(target):
+            target = _safe_image_path(data_dir, session_id, block.src)
+            if target is None or not _is_image(target):
                 para = doc.add_paragraph()
                 run = para.add_run(f"[image manquante : {block.src}]")
                 run.italic = True
@@ -517,10 +531,10 @@ def _pdf_table(pdf, rows: list[list[str]], content_w: float, header: bool = True
     pdf.ln(2.2)
 
 
-def _pdf_image(pdf, path: str, block, content_w: float) -> None:
+def _pdf_image(pdf, path: str | None, block, content_w: float) -> None:
     from PIL import Image
 
-    if not _is_image(path):
+    if not path or not _is_image(path):
         pdf.set_font("DejaVu", "I", 8)
         pdf.set_text_color(0x80, 0x80, 0x80)
         pdf.multi_cell(content_w, 4.4, f"[image manquante : {block.src}]")
@@ -549,7 +563,7 @@ def _pdf_image(pdf, path: str, block, content_w: float) -> None:
     pdf.rect(x, y, w_mm, h_mm)
     try:
         # Lossless PNG stays PNG (crisp screenshots); JPEG is auto-detected.
-        pdf.image(path, x=x, y=y, w=w_mm, h=h_mm, type="PNG" if fmt == "PNG" else None)
+        pdf.image(path, x=x, y=y, w=w_mm, h=h_mm)  # format auto-détecté par fpdf2
     except Exception:  # noqa: BLE001
         pdf.set_font("DejaVu", "I", 8)
         pdf.multi_cell(content_w, 4.4, f"[image could not be embedded: {block.src}]")
@@ -623,7 +637,8 @@ def build_report_pdf(data_dir: str, session_id: str) -> bytes | None:
         elif block.kind == "tbody":
             _pdf_table(pdf, block.rows, content_w, header=False)
         elif block.kind == "image":
-            _pdf_image(pdf, os.path.join(base_dir, block.src), block, content_w)
+            target = _safe_image_path(data_dir, session_id, block.src)
+            _pdf_image(pdf, target if target else os.path.join(base_dir, block.src), block, content_w)
         elif block.kind == "quote":
             pdf.set_font("DejaVu", "I", 9)
             pdf.set_text_color(0x55, 0x5A, 0x60)
