@@ -66,10 +66,12 @@ export interface Repository {
   name: string;
   source_type: string;
   gitlab_url: string | null;
+  github_project_id: string | null;
   has_webhook: boolean;
   is_private: boolean;
   upload_ready: boolean;
   push_patches: boolean;
+  archived: boolean;
   ingestion_status: string;
   ingestion_error: string | null;
   pipeline_config: Record<string, string>;
@@ -229,8 +231,9 @@ export const api = {
     return access_token;
   },
   me: () => request<User>("/users/me"),
-  repositories: () => request<Repository[]>("/repositories"),
-  createRepository: (body: Partial<Repository> & { gitlab_token?: string; push_patches?: boolean }) =>
+  repositories: (includeArchived = false) =>
+    request<Repository[]>(`/repositories${includeArchived ? "?include_archived=true" : ""}`),
+  createRepository: (body: Partial<Repository> & { gitlab_token?: string; github_token?: string; push_patches?: boolean }) =>
     request<Repository>("/repositories", { method: "POST", body: JSON.stringify(body) }),
   deleteRepository: (id: string) =>
     request<void>(`/repositories/${id}`, { method: "DELETE" }),
