@@ -36,10 +36,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!resp.ok) {
     const detail =
       (data as { detail?: unknown } | undefined)?.detail ??
-      (raw ? `HTTP ${resp.status}` : resp.statusText);
+      (raw ? `HTTP ${resp.status} ${resp.statusText}`.trim() : resp.statusText);
     throw new ApiError(resp.status, String(detail));
   }
-  if (resp.status === 204 || data === undefined) return undefined as T;
+  if (resp.status === 204 || !raw) return undefined as T;
+  if (data === undefined) {
+    // 2xx but not JSON (e.g. a proxy serving index.html): report it instead of
+    // handing `undefined` to a page that expects data.
+    throw new ApiError(resp.status, "Unexpected response from the server");
+  }
   return data as T;
 }
 
@@ -61,12 +66,10 @@ export interface Repository {
   name: string;
   source_type: string;
   gitlab_url: string | null;
-  github_project_id: string | null;
   has_webhook: boolean;
   is_private: boolean;
   upload_ready: boolean;
   push_patches: boolean;
-  archived: boolean;
   ingestion_status: string;
   ingestion_error: string | null;
   pipeline_config: Record<string, string>;
@@ -226,9 +229,8 @@ export const api = {
     return access_token;
   },
   me: () => request<User>("/users/me"),
-  repositories: (includeArchived = false) =>
-    request<Repository[]>(`/repositories${includeArchived ? "?include_archived=true" : ""}`),
-  createRepository: (body: Partial<Repository> & { gitlab_token?: string; github_token?: string; push_patches?: boolean }) =>
+  repositories: () => request<Repository[]>("/repositories"),
+  createRepository: (body: Partial<Repository> & { gitlab_token?: string; push_patches?: boolean }) =>
     request<Repository>("/repositories", { method: "POST", body: JSON.stringify(body) }),
   deleteRepository: (id: string) =>
     request<void>(`/repositories/${id}`, { method: "DELETE" }),
