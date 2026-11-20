@@ -198,6 +198,10 @@ class TestExport:
         assert _safe_image_path(data_dir, session_id, "screenshots/shot.png") is not None
         assert _safe_image_path(data_dir, session_id, "../../etc/passwd") is None
         assert _safe_image_path(data_dir, session_id, "../other-run/report.md") is None
+        # PR #22 policy: only raster images under screenshots/ are embeddable
+        assert _safe_image_path(data_dir, session_id, "report.md") is None
+        assert _safe_image_path(data_dir, session_id, "patches/AUTH-VULN-01.patch") is None
+        assert _safe_image_path(data_dir, session_id, "screenshots/evil.svg") is None
         # and the exporters still produce a file, with a placeholder instead
         evil = SAMPLE_MD.replace("screenshots/shot.png", "../../etc/passwd")
         d = reports.deliverables_dir(data_dir, session_id)

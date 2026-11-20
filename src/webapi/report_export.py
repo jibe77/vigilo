@@ -17,8 +17,7 @@ import logging
 import os
 import re
 
-from src.webapi import safefs
-from src.webapi.reports import REPORT_FILENAME, _deliverable_parts, deliverables_dir
+from src.webapi.reports import REPORT_FILENAME, deliverables_dir, open_report_image
 
 log = logging.getLogger(__name__)
 
@@ -94,16 +93,19 @@ def _is_image(path: str) -> bool:
 
 
 def _safe_image_path(data_dir: str, session_id: str, src: str) -> str | None:
-    """Resolve a report-relative image path, refusing anything that escapes the
-    run's deliverables/ (the markdown is agent-written, so ``src`` is hostile:
-    ``../../etc/passwd`` must not end up embedded in the export)."""
-    parts = [p for p in src.replace("\\", "/").split("/") if p not in ("", ".")]
-    if any(p == ".." for p in parts):
+    """Resolve a report-relative image to a local path for embedding, reusing the
+    same policy as PR #22's ``/files/`` endpoint: only raster images under
+    ``deliverables/screenshots/``, opened through safefs (O_NOFOLLOW) so a symlink
+    planted in the agent-controlled workspace cannot leak files from outside the
+    run, and ``../../`` traversal is rejected by construction.
+
+    Returns a path only when the file passes :func:`open_report_image`; the caller
+    must still handle a vanished file between check and open.
+    """
+    if open_report_image(data_dir, session_id, src) is None:
         return None
-    base = deliverables_dir(data_dir, session_id)
-    if not safefs.is_safe_file(base, *parts):
-        return None
-    return os.path.join(base, *parts)
+    parts = tuple(p for p in src.replace("\\", "/").split("/") if p not in ("", "."))
+    return os.path.join(deliverables_dir(data_dir, session_id), *parts)
 
 
 # ── shared inline handling ───────────────────────────────────────────────────
