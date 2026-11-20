@@ -9,9 +9,9 @@ const LABELS: Record<ReportFormat, string> = {
 };
 
 /**
- * "Download as …" split button: the current format downloads on click, the
- * chevron opens the format list. Docx/PDF are rendered by the API on demand,
- * so a menu item may take a second on the Pi — the trigger shows progress.
+ * "Download report as …" button: opens a small menu listing the available
+ * formats. Docx/PDF are rendered by the API on demand, so a menu item may
+ * take a second on the Pi — the trigger shows progress.
  */
 export function ReportDownloadMenu({
   onDownload,
@@ -22,7 +22,6 @@ export function ReportDownloadMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<ReportFormat | null>(null);
-  const [current, setCurrent] = useState<ReportFormat>("markdown");
   const ref = useRef<HTMLDivElement>(null);
 
   // Close on outside click / Escape — the menu is absolutely positioned.
@@ -47,33 +46,25 @@ export function ReportDownloadMenu({
     setBusy(format);
     try {
       await onDownload(format);
-      setCurrent(format);
     } finally {
       setBusy(null);
     }
   }
 
-  const label = busy ? `Preparing ${LABELS[busy]}…` : `Download as ${LABELS[current]}`;
+  const label = busy ? `Preparing ${LABELS[busy]}…` : "Download report as …";
 
   return (
     <div ref={ref} className="relative inline-flex">
       <button
-        className="btn-ghost-sm rounded-r-none border-r-0"
-        disabled={disabled || busy !== null}
-        onClick={() => void run(current)}
-        title={`Download the report as ${LABELS[current]}`}
-      >
-        {label}
-      </button>
-      <button
-        className="btn-ghost-sm rounded-l-none px-2"
+        className="btn-ghost-sm"
         disabled={disabled || busy !== null}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Choose download format"
+        title="Download the report in Markdown, Docx or PDF"
         onClick={() => setOpen((o) => !o)}
       >
-        <svg width="10" height="6" viewBox="0 0 10 6" aria-hidden="true">
+        {label}
+        <svg width="10" height="6" viewBox="0 0 10 6" aria-hidden="true" className="ml-2 inline-block">
           <path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" />
         </svg>
       </button>
@@ -86,9 +77,7 @@ export function ReportDownloadMenu({
             <li key={format} role="none">
               <button
                 role="menuitem"
-                className={`block w-full px-3 py-1.5 text-left hover:bg-canvas ${
-                  format === current ? "font-semibold text-accent" : "text-ink"
-                }`}
+                className="block w-full px-3 py-1.5 text-left hover:bg-canvas text-ink"
                 onClick={() => void run(format)}
               >
                 {LABELS[format]}
