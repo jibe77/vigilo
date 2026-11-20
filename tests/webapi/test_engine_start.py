@@ -530,3 +530,52 @@ class TestCancelWaitsBeforeTerminate:
         await engine.cancel(run)
         assert run.status == "cancelled"
         engine._client.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_start_does_not_block_event_loop(self, monkeypatch, tmp_path, patched_settings):
+        """The clone/extract must run in a worker thread: while prepare_repo sleeps
+        (simulating a slow clone), other coroutines on the same loop must keep
+        making progress — with the old inline call the loop stalled instead."""
+        import asyncio
+        import time
+
+        import src.webapi.ingestion as ingestion
+
+        patched_settings()
+        monkeypatch.setattr("src.webapi.engine.temporal.capture_source_info", lambda *a, **k: None)
+
+        def slow_prepare_repo(**kw):
+            # Blocking sleep in the calling thread: with the old inline call this
+            # froze the whole event loop (ticker got ~0 ticks); via to_thread it
+            # runs in a worker and the loop keeps ticking.
+            end = time.monotonic() + 0.4
+            while time.monotonic() < end:
+                time.sleep(0.01)
+
+        monkeypatch.setattr(ingestion, "prepare_repo", slow_prepare_repo)
+
+        from src.webapi.engine.temporal import TemporalEngine
+        engine = TemporalEngine()
+        client = MagicMock()
+        client.start_workflow = AsyncMock()
+        monkeypatch.setattr(engine, "_client", AsyncMock(return_value=client))
+        monkeypatch.setattr(engine, "_resolve_token", AsyncMock(return_value=None))
+
+        ticks = 0
+
+        async def ticker():
+            nonlocal ticks
+            for _ in range(8):
+                await asyncio.sleep(0.05)
+                ticks += 1
+
+        run = _run(tmp_path)
+        t0 = time.monotonic()
+        await asyncio.gather(engine.start(run, _job(), _repo()), ticker())
+        elapsed = time.monotonic() - t0
+        # 8 ticks x 50 ms served DURING the 400 ms blocking clone -> loop not stalled.
+        # Old inline code: elapsed ~= 0.8 s (clone then ticker serialized) and
+        # ticks ~= 0. Fixed code: ticker runs concurrently, elapsed ~= 0.4 s.
+        assert ticks >= 6, f"event loop stalled: only {ticks}/8 ticks during clone"
+        assert elapsed < 0.7, f"start() serialized with the ticker ({elapsed:.2f}s)"
+        assert client.start_workflow.await_count == 1
