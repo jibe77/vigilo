@@ -591,3 +591,47 @@ class TestResolveTarget:
         # an unrelated GITLAB_URL does not override the repository's own host
         assert gitlab_mr.resolve_gitlab_target("https://other.example/a/b.git") == (
             "https://other.example", "a/b")
+
+
+class TestRecreateMissingBranches:
+    """Manifest lists fix branches but git lost them (workspace re-cloned after
+    remediation): delivery must recreate them from deliverables/patches/*.patch
+    instead of finishing with 'nothing / no fix branches'."""
+
+    async def test_missing_branch_recreated_from_patch_and_pushed(
+        self, world, gitlab, redeemed
+    ):
+        repo = world.repo
+        patch_dir = os.path.join(repo, "deliverables", "patches")
+        os.makedirs(patch_dir, exist_ok=True)
+        git(repo, "checkout", "fix/VG-001")
+        # patch au format export (avec index lines) comme deliverables/patches
+        diff = subprocess.run(["git", "diff", "--binary", "main..fix/VG-001"],
+                              cwd=repo, capture_output=True, text=True).stdout
+        with open(os.path.join(patch_dir, "VG-001.patch"), "w") as fh:
+            fh.write(diff)
+        git(repo, "checkout", "main")
+        git(repo, "branch", "-D", "fix/VG-001")
+        # base = commit scanné (main), comme le vrai run
+        world.source["commit"] = git(repo, "rev-parse", "main")
+        # manifest still lists the branch -> git no longer has it
+        assert "fix/VG-001" not in await git_push._fix_branches(repo)
+        # marquer la branche comme non livrée dans le manifest (état réel après re-clone)
+        m = manifest(world)
+        for b in m["branches"]:
+            b["pushed"] = False
+            b.pop("mr_url", None)
+        with open(os.path.join(world.repo, "deliverables", "remediation_manifest.json"), "w") as fh:
+            json.dump(m, fh)
+        # nettoyer un éventuel état de delivery antérieur
+        state_file = os.path.join(repo, ".git", "vigilo-delivery.json")
+        if os.path.exists(state_file):
+            os.remove(state_file)
+
+        res = await git_push.deliver_patches(
+            repo, "sess", {"enabled": True}, source=world.source, secrets=SECRETS)
+        assert res["status"] in ("delivered", "partial"), res
+        rc = subprocess.run(["git", "rev-parse", "--verify", "fix/VG-001"],
+                            cwd=repo, capture_output=True, text=True).returncode
+        assert rc == 0
+        assert entry(world, "fix/VG-001")["pushed"] is True
