@@ -2,8 +2,11 @@
   "$schema": "https://opencode.ai/config.json",
 
   "permissions": [
-    { "action": "*", "resource": "*", "effect": "allow" }
+    { "action": "*", "resource": "*", "effect": "allow" },
+    { "action": "websearch", "resource": "*", "effect": "allow" },
+    { "action": "webfetch", "resource": "*", "effect": "allow" }
   ],
+  "websearch": { "provider": "${OPENCODE_WEBSEARCH_PROVIDER:-exa}" },
 
   "enabled_providers": ["litellm"],
 
