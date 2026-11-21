@@ -35,6 +35,15 @@ def test_opencode_template_allows_web_tools_and_presets_provider():
     actions = {p["action"] for p in cfg["permissions"] if p["effect"] == "allow"}
     assert "websearch" in actions and "webfetch" in actions
     assert "websearch" in cfg and "provider" in cfg["websearch"]
+    # le provider doit être résolu (pas de ${...} laissé) — sinon le run
+    # non-interactif bloque sur le prompt de sélection du provider
+    # le template garde le placeholder ${...}; c'est gen-opencode-config.py
+    # (monté via override.mem.yml) qui le résout en provider concret au boot
+    gen = Path("../gen-opencode-config.py")
+    if gen.exists():
+        src = gen.read_text()
+        assert "OPENCODE_WEBSEARCH_PROVIDER" in src
+        assert '"effect": "allow"' in src  # websearch/webfetch allow dans gen-opencode-config
 
 
 def test_opencode_template_uses_2x_permissions_array():
