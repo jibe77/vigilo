@@ -93,6 +93,9 @@ def _hardened_env(protocols: str | None = None, *, with_token: bool = False) -> 
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_ALLOW_PROTOCOL": protocols,
         "GIT_ATTR_NOSYSTEM": "1",
+        # identité de commit de secours: le worker n'a pas de ~/.gitconfig (HOME=/nonexistent)
+        "GIT_AUTHOR_NAME": "vigilo", "GIT_AUTHOR_EMAIL": "vigilo@localhost",
+        "GIT_COMMITTER_NAME": "vigilo", "GIT_COMMITTER_EMAIL": "vigilo@localhost",
     })
     return env
 
@@ -430,6 +433,69 @@ async def _base_branch(repo_path: str) -> str | None:
     return None
 
 
+def _manifest_fix_branches_sync(repo_path: str) -> list[str]:
+    """Fix branch names listed in ``deliverables/remediation_manifest.json``."""
+    data = _read_json(Path(repo_path) / "deliverables" / "remediation_manifest.json")
+    out: list[str] = []
+    for entry in data.get("branches") or []:
+        if isinstance(entry, dict) and entry.get("branch"):
+            out.append(entry["branch"])
+    return out
+
+
+async def _recreate_branch_from_patch(repo_path: str, branch: str) -> None:
+    """Recreate a local ``fix/*`` branch by applying its patch from deliverables/patches.
+
+    Used when the workspace was re-cloned after remediation: the branches are gone from
+    git but their patches are still on disk. Best-effort; failure is logged, not raised.
+    """
+    # patch_export nomme les fichiers <branche sans "fix/">.patch (fix/VG-001 -> VG-001.patch)
+    short = branch.removeprefix("fix/")
+    candidates = [
+        Path(repo_path) / "deliverables" / "patches" / f"{short}.patch",
+        Path(repo_path) / "deliverables" / "patches" / f"{branch.replace('/', '_')}.patch",
+        Path(repo_path) / "deliverables" / "patches" / f"{branch}.patch",
+    ]
+    patch = next((c for c in candidates if c.exists()), None)
+    if patch is None:
+        logger.warning("Patch delivery: no patch file for missing branch %s", branch)
+        return
+    manifest = _read_json(Path(repo_path) / "deliverables" / "remediation_manifest.json")
+    base = (manifest.get("git_base") or {}).get("commit") or "HEAD"
+    rc, _o, _e = await _run_git(["git", "checkout", "-B", branch, base], repo_path)
+    # s'assurer que la branche pointe VRAIMENT sur un commit (checkout -B peut échouer
+    # silencieusement si base est un sha absent localement après re-clone)
+    if rc == 0:
+        rc2, cur, _ = await _run_git(["git", "rev-parse", "--verify", branch], repo_path)
+        if rc2 != 0:
+            logger.warning("Patch delivery: branch %s not created (base %s missing?)", branch, base[:8])
+            return
+    if rc != 0:
+        logger.warning("Patch delivery: could not create branch %s: %s", branch, _e[:120])
+        return
+    rc, _o, _e = await _run_git(
+        ["git", "apply", "--3way", str(patch)], repo_path)
+    if rc != 0:
+        # fallback: the patch may be a full branch diff without index lines
+        rc2, _o2, _e2 = await _run_git(["git", "apply", str(patch)], repo_path)
+        if rc2 != 0:
+            await _run_git(["git", "checkout", "--", "."], repo_path)
+            await _run_git(["git", "checkout", "-"], repo_path)
+            logger.warning("Patch delivery: patch for %s did not apply: %s", branch, _e2[:120])
+            return
+    await _run_git(["git", "add", "-A"], repo_path)
+    rc3, _o3, _e3 = await _run_git(
+        ["git", "commit", "--allow-empty", "-m", f"fix: restore {branch} from deliverable patch"], repo_path)
+    if rc3 != 0 and "nothing to commit" not in (_e3 or ""):
+        logger.warning("Patch delivery: commit for %s failed: %s", branch, _e3[:120])
+    # forcer le tip de la branche même si le commit est un no-op (patch déjà appliqué)
+    rc4, tip, _ = await _run_git(["git", "rev-parse", branch], repo_path)
+    if rc4 == 0:
+        logger.info("Patch delivery: recreated branch %s at %s (patch %s)", branch, tip[:8], patch.name)
+    else:
+        logger.warning("Patch delivery: branch %s not resolvable after restore", branch)
+
+
 async def _fix_branches(repo_path: str) -> dict[str, str]:
     """``{branch: tip sha}`` of every local ``fix/*`` branch."""
     rc, out, _ = await _run_git(
@@ -636,6 +702,22 @@ async def _deliver_locked(
         tips.update(await _fix_branches(repo_path))
     except OSError:
         pass
+
+    # Reconcile with the remediation manifest: if the manifest lists fix branches that
+    # git no longer has (workspace re-cloned between remediation and delivery), recreate
+    # them from deliverables/patches/*.patch so delivery can still push them.
+    manifest_branches = _manifest_fix_branches_sync(repo_path)
+    missing = [b for b in manifest_branches if b not in tips]
+    if missing:
+        logger.warning(
+            "Patch delivery: %d fix branch(es) from the manifest are missing in git; "
+            "recreating from deliverables/patches: %s", len(missing), missing)
+        for br in missing:
+            await _recreate_branch_from_patch(repo_path, br)
+        try:
+            tips.update(await _fix_branches(repo_path))
+        except OSError:
+            pass
 
     if not (push or {}).get("enabled"):
         return finish("skipped", "push not enabled for this run")
