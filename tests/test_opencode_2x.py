@@ -26,13 +26,24 @@ def test_executor_uses_opencode_2x_flags():
     assert '"--format", "json"' in cmd_code
 
 
+def test_opencode_template_allows_web_tools_and_presets_provider():
+    """Web tools are a security feature (dynamic checks): they must be allowed
+    and the search provider preset, or non-interactive runs block on the
+    provider selection prompt ('Cancelled a request for input: Web Search')."""
+    raw = Path("configs/opencode.template.json").read_text().replace("__MODELS__", "{}")
+    cfg = json.loads(raw)
+    actions = {p["action"] for p in cfg["permissions"] if p["effect"] == "allow"}
+    assert "websearch" in actions and "webfetch" in actions
+    assert "websearch" in cfg and "provider" in cfg["websearch"]
+
+
 def test_opencode_template_uses_2x_permissions_array():
     raw = Path("configs/opencode.template.json").read_text()
     # template has a __MODELS__ placeholder -> stub it before json parsing
     raw = raw.replace("__MODELS__", "{}")
     cfg = json.loads(raw)
     assert "permissions" in cfg and isinstance(cfg["permissions"], list)
-    assert cfg["permissions"] == [{"action": "*", "resource": "*", "effect": "allow"}]
+    assert {"action": "*", "resource": "*", "effect": "allow"} in cfg["permissions"]
     assert "permission" not in cfg  # 1.x key must be gone
 
 
