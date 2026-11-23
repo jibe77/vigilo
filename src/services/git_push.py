@@ -100,10 +100,20 @@ def _hardened_env(protocols: str | None = None, *, with_token: bool = False) -> 
     return env
 
 
-def _git_cmd(args: list[str]) -> list[str]:
-    """``["git", *args]`` with the hardening ``-c`` options right after ``git``."""
+def _git_cmd(args: list[str], cwd: str | None = None) -> list[str]:
+    """``["git", *args]`` with the hardening ``-c`` options right after ``git``.
+
+    ``cwd`` is added as a scoped ``safe.directory`` entry: every git process here
+    operates on a directory Vigilo itself created (job checkout, temp bare repo),
+    which may be owned by a different uid than the delivery process (agents run
+    as ``scanner``, the worker as root). Without this, git refuses the checkout
+    with "detected dubious ownership" and delivery silently delivers nothing.
+    """
     if args and args[0] == "git":
-        return ["git", *_GIT_HARDENING_ARGS, *args[1:]]
+        hardening = list(_GIT_HARDENING_ARGS)
+        if cwd:
+            hardening += ["-c", f"safe.directory={cwd}"]
+        return ["git", *hardening, *args[1:]]
     return args
 
 GIT_OLD = ".git.vigilo-old"
@@ -198,7 +208,7 @@ async def _run_git(
         if ctx is not None:
             env.update(ctx.__enter__())
         proc = await asyncio.create_subprocess_exec(
-            *_git_cmd(args), cwd=cwd, env=env,
+            *_git_cmd(args, cwd), cwd=cwd, env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         try:
