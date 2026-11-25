@@ -1,6 +1,7 @@
 """Engine wiring (temporal / docker): workflow type, workflow id, per-run secret reference."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -411,6 +412,56 @@ class TestDockerEngine:
             monkeypatch, tmp_path, _repo(source_type="upload", push_patches=True))
         assert "secrets" not in self.tclient.start_workflow.call_args.args[1]
         assert len(call.kwargs["volumes"]) == 1
+
+    async def test_start_clears_half_written_repo_dir(
+        self, monkeypatch, tmp_path, patched_settings
+    ):
+        """A retried start must not die on "destination path already exists":
+        a leftover half-written checkout is cleared before the clone."""
+        patched_settings()
+        run = _run(tmp_path)
+        junk = os.path.join(run.data_dir, "repo", "half-written.txt")
+        os.makedirs(os.path.dirname(junk))
+        with open(junk, "w") as fh:
+            fh.write("interrupted clone residue")
+        seen = {}
+        def fake_prepare(**kw):
+            seen["files"] = sorted(os.listdir(kw["repo_dir"]))
+        monkeypatch.setattr("src.webapi.ingestion.prepare_repo", fake_prepare)
+        self._fake_docker(monkeypatch)
+        from src.webapi.engine.docker_temporal import DockerTemporalEngine
+        engine = DockerTemporalEngine()
+        monkeypatch.setattr(engine, "_resolve_token", AsyncMock(return_value=None))
+        await engine.start(run, _job(), _repo())
+        assert seen["files"] == []          # clone sees a clean directory
+        assert not os.path.exists(junk)     # residue is gone
+
+    async def test_start_does_not_block_the_event_loop(
+        self, monkeypatch, tmp_path, patched_settings
+    ):
+        """The clone runs off the loop: a slow prepare_repo must not freeze the API."""
+        import time
+
+        patched_settings()
+        def slow_prepare(**kw):
+            time.sleep(0.3)
+        monkeypatch.setattr("src.webapi.ingestion.prepare_repo", slow_prepare)
+        self._fake_docker(monkeypatch)
+        from src.webapi.engine.docker_temporal import DockerTemporalEngine
+        engine = DockerTemporalEngine()
+        monkeypatch.setattr(engine, "_resolve_token", AsyncMock(return_value=None))
+        ticks = 0
+        async def ticker():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.02)
+                ticks += 1
+        task = asyncio.create_task(ticker())
+        try:
+            await engine.start(_run(tmp_path), _job(), _repo())
+        finally:
+            task.cancel()
+        assert ticks > 0  # event loop kept ticking while the "clone" ran
 
 
 class TestCancelWaitsBeforeTerminate:

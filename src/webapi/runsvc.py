@@ -14,7 +14,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.webapi.db import _session_maker
 
@@ -108,6 +108,29 @@ async def _active_count(session: AsyncSession) -> int:
     )
 
 
+async def _claim_for_launch(session: AsyncSession, run: Run) -> bool:
+    """Atomically transition a run from queued to preparing.
+
+    engine.start() can spend minutes cloning before anything is committed, and the
+    ORM only flushes the new status after it returns. Without this claim a
+    concurrent drain_queue tick (or a retried/background launch) still sees the
+    run 'queued' and starts it a second time: the duplicate clone lands in the
+    first clone's half-written directory ("already exists and is not empty"), the
+    run is marked failed, and the first launch continues as a ghost workflow.
+    """
+    started = datetime.now(timezone.utc)
+    res = await session.execute(
+        update(Run)
+        .where(Run.id == run.id, Run.status == RUN_QUEUED)
+        .values(status=RUN_PREPARING, started_at=started)
+    )
+    await session.commit()
+    if res.rowcount == 0:
+        logger.info("run %s already claimed by another launcher — skipping", run.id)
+        return False
+    run.status = RUN_PREPARING
+    run.started_at = started
+    return True
 
 
 async def _launch_bg(run_id: uuid.UUID, engine: ExecutionEngine, job_id: uuid.UUID,
@@ -121,7 +144,8 @@ async def _launch_bg(run_id: uuid.UUID, engine: ExecutionEngine, job_id: uuid.UU
             return
         job = await session.get(Job, job_id)
         repo = await session.get(Repository, repo_id) if repo_id else None
-        run.started_at = datetime.now(timezone.utc)
+        if not await _claim_for_launch(session, run):
+            return
         try:
             await engine.start(run, job, repo)
         except Exception as exc:
@@ -136,7 +160,11 @@ async def _launch_bg(run_id: uuid.UUID, engine: ExecutionEngine, job_id: uuid.UU
 
 async def _launch(session: AsyncSession, engine: ExecutionEngine, run: Run,
                   job: Job, repo: Repository | None) -> None:
-    run.started_at = datetime.now(timezone.utc)
+    """Start a run via the engine. A launch failure (bad clone URL, missing token,
+    Docker error, …) must NOT leave the run stuck 'queued' or 500 the caller — mark
+    it failed with a user-facing summary and finish cleanly."""
+    if not await _claim_for_launch(session, run):
+        return
     try:
         await engine.start(run, job, repo)
     except Exception as exc:
