@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0009_greybox_web"  # <=32 chars
-down_revision = "0008_run_secrets_job_cookie"
+down_revision = "0009_github_source"  # local: GitHub-source migration (prod DB already stamped here) sits before the greybox chain
 branch_labels = None
 depends_on = None
 
