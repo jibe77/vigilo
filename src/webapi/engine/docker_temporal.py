@@ -16,8 +16,10 @@ covered by the unit suite, which uses FakeEngine.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import shutil
 
 from src.webapi.engine.common import (
     build_workflow_input,
@@ -69,6 +71,12 @@ class DockerTemporalEngine:
 
         settings = get_settings()
         repo_dir = os.path.join(run.data_dir, "repo")
+        # A previous launch attempt can leave a half-written checkout here
+        # (interrupted or duplicated clone). git refuses to clone into a
+        # non-empty directory; this directory is Vigilo-owned per run, so
+        # start() stays idempotent by clearing it first.
+        if os.path.isdir(repo_dir) and os.listdir(repo_dir):
+            shutil.rmtree(repo_dir)
         os.makedirs(repo_dir, exist_ok=True)
 
         env = {
@@ -86,13 +94,19 @@ class DockerTemporalEngine:
             tree = upload_tree_dir(settings.uploads_dir, str(repo.id))
             upload_path = archive if os.path.isfile(archive) else tree
         run.status = RUN_PREPARING
-        prepare_repo(
-            source_type=repo.source_type, repo_dir=repo_dir,
-            upload_path=upload_path, gitlab_url=repo.gitlab_url, token=token,
-        )
 
-        # Commit SHA + persistent browse-only file tree (best-effort).
-        capture_source_info(run, repo, repo_dir)
+        def _materialize_and_capture() -> None:
+            prepare_repo(
+                source_type=repo.source_type, repo_dir=repo_dir,
+                upload_path=upload_path, gitlab_url=repo.gitlab_url, token=token,
+            )
+            # Commit SHA + persistent browse-only file tree (best-effort).
+            capture_source_info(run, repo, repo_dir)
+
+        # The clone/extract shells out to git: keep it off the event loop so the
+        # API keeps answering while the source materializes (same pattern as
+        # engine/temporal.py).
+        await asyncio.to_thread(_materialize_and_capture)
 
         # Only the repo is mounted. No secret is mounted or put in the environment:
         # the GitLab token / cookie header are redeemed by the worker just in time via
