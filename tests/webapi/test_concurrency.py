@@ -120,7 +120,7 @@ class TestConcurrencyCap:
         t0 = time.monotonic()
         r = await client.post(f"/jobs/{job['id']}/run", headers=h)
         elapsed = time.monotonic() - t0
-        assert r.status_code == 201 and r.json()["status"] == "queued"
+        assert r.status_code == 201 and r.json()["status"] in ("queued", "preparing")
         assert elapsed < 1.0, f"endpoint blocked {elapsed:.2f}s on engine.start"
         # laisser la tâche de fond se terminer proprement
         release.set()

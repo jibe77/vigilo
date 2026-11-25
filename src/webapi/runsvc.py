@@ -77,12 +77,18 @@ async def create_and_maybe_start(
 
     async with _get_admission_lock():
         if await _active_count(session) < await _effective_cap(session):
-            # Ne PAS attendre engine.start (clone/extract bloquant, parfois long):
-            # la run est déjà commitée en "queued", le caller (API/UI) peut rediriger
-            # immédiatement vers la page du run. Le lancement se poursuit en tâche de fond.
-            task = asyncio.create_task(_launch_bg(run.id, engine, job.id, repo.id if repo else None))
-            _BACKGROUND_TASKS.add(task)
-            task.add_done_callback(_BACKGROUND_TASKS.discard)
+            # Ne PAS attendre engine.start (clone/extract bloquant, parfois long): le
+            # caller (API/UI) peut rediriger immédiatement vers la page du run. Le
+            # lancement se poursuit en tâche de fond.
+            # La run est réservée (queued -> preparing) DANS le verrou d'admission: sinon
+            # elle reste "queued" pendant tout le clone, n'est pas comptée par
+            # _active_count, et N requêtes simultanées dépassent le plafond global.
+            if await _claim_for_launch(session, run):
+                task = asyncio.create_task(
+                    _launch_bg(run.id, engine, job.id, repo.id if repo else None)
+                )
+                _BACKGROUND_TASKS.add(task)
+                task.add_done_callback(_BACKGROUND_TASKS.discard)
     await session.refresh(run)
     return run
 
@@ -144,8 +150,12 @@ async def _launch_bg(run_id: uuid.UUID, engine: ExecutionEngine, job_id: uuid.UU
             return
         job = await session.get(Job, job_id)
         repo = await session.get(Repository, repo_id) if repo_id else None
-        if not await _claim_for_launch(session, run):
+        # Normally already claimed (preparing) by create_and_maybe_start under the
+        # admission lock; a still-queued run (direct caller) is claimed here.
+        if run.status == RUN_QUEUED and not await _claim_for_launch(session, run):
             return
+        if run.status != RUN_PREPARING:
+            return  # cancelled/finished meanwhile
         try:
             await engine.start(run, job, repo)
         except Exception as exc:
