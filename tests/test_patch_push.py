@@ -176,7 +176,7 @@ class TestDeliver:
             assert TOKEN not in " ".join(call.argv)
         # the token reaches exactly the authenticated git subprocess, via its env only
         with_token = [c for c in git_spy if TOKEN in c.env.values()]
-        assert with_token and all("push" in c.argv[:12] for c in with_token)
+        assert with_token and all("push" in c.argv for c in with_token)
         # ... and never from inside the agent-writable checkout
         assert all(c.cwd != world.repo for c in with_token)
         for root, _d, files in os.walk(world.tmp):
